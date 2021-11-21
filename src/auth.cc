@@ -31,7 +31,7 @@ boost::asio::awaitable<bool> auth(const string &token, string &username,
         co_return false;
     }
     http_req.body() = body_str;
-    http_req.set("Content-Length", body_str.length());
+    http_req.content_length(body_str.length());
     beast::flat_buffer buffer_http;
     tcp::resolver resolver(ioc);
     try {
