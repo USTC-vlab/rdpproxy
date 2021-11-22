@@ -8,12 +8,13 @@
 using namespace std;
 using boost::asio::ip::tcp;
 
-static const tuple<bool, bool, string> HandshakeError(false, false, "");
+static const tuple<bool, bool, string, ssize_t> HandshakeError(false, false, "", 0);
 
 extern Configuration configuration;
 
 Session::Session(boost::asio::io_context &ioc_, tcp::socket &socket)
-    : ioc(ioc_), downstream_socket(move(socket)), upstream_socket(ioc), has_closed(false) {
+    : ioc(ioc_), downstream_socket(move(socket)), upstream_socket(ioc), has_closed(false),
+      has_ssl_handshaked(false) {
     downstream_socket.set_option(tcp::no_delay(true));
     downstream_socket.set_option(boost::asio::socket_base::keep_alive(true));
     ip = downstream_socket.remote_endpoint().address().to_string();
@@ -49,7 +50,8 @@ boost::asio::awaitable<void> Session::handle() {
         bool success, is_redirection;
         vector<uint8_t> cr_pdu;
         string token;
-        tie(success, is_redirection, token) = co_await handshake(cr_pdu);
+        size_t neg_offset;
+        tie(success, is_redirection, token, neg_offset) = co_await handshake(cr_pdu);
         if (!success) {
             close();
             co_return;
@@ -66,7 +68,7 @@ boost::asio::awaitable<void> Session::handle() {
                 tcp::endpoint(boost::asio::ip::address::from_string(ip), port),
                 boost::asio::use_awaitable);
             upstream_socket.set_option(tcp::no_delay(true));
-            co_await ASYNC_WRITE(upstream_socket, cr_pdu);
+            //co_await ASYNC_WRITE(upstream_socket, cr_pdu);
             boost::asio::co_spawn(ioc.get_executor(),
                 [self = shared_from_this(), this] {
                     return handle_up_to_down();
@@ -87,7 +89,8 @@ boost::asio::awaitable<void> Session::handle() {
 boost::asio::awaitable<Session::HandshakeResult> Session::handshake(vector<uint8_t> &cr_pdu) {
     string cookie;
     vector<uint8_t> buffer;
-    if (!co_await read_x224_cr_pdu(cookie, buffer)) {
+    ssize_t neg_offset;
+    if (!co_await peak_x224_cr_pdu(cookie, buffer, neg_offset)) {
         co_return HandshakeError;
     }
     bool is_redirection = false;
@@ -107,13 +110,16 @@ boost::asio::awaitable<Session::HandshakeResult> Session::handshake(vector<uint8
         store_u16be(p + 2, old_size - cookie_size);
         p[4] = old_size - cookie_size - 5;
         token = cookie.substr(prefix.length());
+        neg_offset -= cookie_size;
+    } else {
+        cr_pdu = std::move(buffer);
     }
-    co_return HandshakeResult(true, is_redirection, token);
+    co_return HandshakeResult(true, is_redirection, token, neg_offset);
 }
 
-boost::asio::awaitable<bool> Session::read_x224_cr_pdu(string &cookie, vector<uint8_t> &buffer) {
+boost::asio::awaitable<bool> Session::read_x224_cr_pdu(string &cookie, vector<uint8_t> &buffer, ssize_t &neg_offset) {
     uint8_t tpkt_version = co_await read_u16(downstream_socket, buffer);
-    if (tpkt_version != 0x0003) {
+    if (tpkt_version != 0x03) {
         co_return false;
     }
     size_t tpkt_size = co_await read_u16be(downstream_socket, buffer);
@@ -129,7 +135,7 @@ boost::asio::awaitable<bool> Session::read_x224_cr_pdu(string &cookie, vector<ui
     if (dst_ref != 0) {
         co_return false;
     }
-    uint8_t src_ref = co_await read_u16(downstream_socket, buffer);
+    uint16_t src_ref = co_await read_u16(downstream_socket, buffer);
     uint8_t class_option = co_await read_u8(downstream_socket, buffer);
     if ((class_option & 0xfc) != 0) {
         co_return false;
@@ -139,6 +145,36 @@ boost::asio::awaitable<bool> Session::read_x224_cr_pdu(string &cookie, vector<ui
     size_t pos = search_crlf(p, size);
     if (pos != string::npos) {
         cookie = string((const char *)p, pos);
+        neg_offset = p - buffer.data() + pos + 2;
+    } else {
+        neg_offset = p - buffer.data();
+    }
+    co_return true;
+}
+
+boost::asio::awaitable<bool> Session::peak_x224_cr_pdu(std::string &cookie, std::vector<uint8_t> &buffer, ssize_t &neg_offset) {
+    uint8_t *p = co_await peek_bytes(downstream_socket, buffer, 4);
+    uint8_t tpkt_version = p[0];
+    if (tpkt_version != 0x03) {
+        co_return false;
+    }
+    uint16_t tpkt_size = load_u16be(p + 2);
+    p = co_await peek_bytes(downstream_socket, buffer, tpkt_size);
+    uint8_t length_indicator = p[4];
+    uint8_t cr_cdt = p[5];
+    uint16_t dst_ref = load_u16(p + 6);
+    uint16_t src_ref = load_u16(p + 8);
+    uint8_t class_option = p[10];
+    if (tpkt_size - 5 != length_indicator || cr_cdt != 0xe0 || dst_ref != 0 || (class_option & 0xfc) != 0) {
+        co_return false;
+    }
+    p += 11;
+    size_t pos = search_crlf(p, buffer.size() - 11);
+    if (pos != string::npos) {
+        cookie = string((const char *)p, pos);
+        neg_offset = p - buffer.data() + pos + 2;
+    } else {
+        neg_offset = p - buffer.data();
     }
     co_return true;
 }

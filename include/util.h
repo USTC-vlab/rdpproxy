@@ -79,6 +79,17 @@ inline boost::asio::awaitable<uint8_t *> read_bytes(T &socket, std::vector<uint8
 }
 
 template <class T>
+inline boost::asio::awaitable<std::string> read_string(T &socket, size_t length) {
+    if (length == 0) {
+        co_return std::string();
+    }
+    std::string data;
+    data.resize(length);
+    co_await ASYNC_READ(socket, data.data(), length);
+    co_return data;
+}
+
+template <class T>
 inline boost::asio::awaitable<uint8_t> read_u8(T &socket, std::vector<uint8_t> &buffer) {
     uint8_t *p = expand_buffer(buffer, 1);
     co_await ASYNC_READ(socket, p, 1);
@@ -111,6 +122,35 @@ inline boost::asio::awaitable<uint32_t> read_u32be(T &socket, std::vector<uint8_
     uint8_t *p = expand_buffer(buffer, 4);
     co_await ASYNC_READ(socket, p, 4);
     co_return load_u32be(p);
+}
+
+template <class T>
+inline boost::asio::awaitable<uint8_t> read_u8(T &socket) {
+    uint8_t data;
+    co_await ASYNC_READ(socket, &data, 1);
+    co_return data;
+}
+
+template <class T>
+inline boost::asio::awaitable<uint16_t> read_u16(T &socket) {
+    uint16_t data;
+    co_await ASYNC_READ(socket, &data, 2);
+    co_return load_u16(&data);
+}
+
+template <class T>
+inline boost::asio::awaitable<uint8_t *> peek_bytes(T &socket, std::vector<uint8_t> &buffer, size_t length) {
+    buffer.resize(length);
+    uint8_t *p = buffer.data();
+    int fd = socket.native_handle();
+    while (true) {
+        co_await socket.async_wait(boost::asio::ip::tcp::socket::wait_read, boost::asio::use_awaitable);
+        ssize_t res = recv(fd, p, length, MSG_PEEK);
+        if (res >= length) {
+            break;
+        }
+    }
+    co_return p;
 }
 
 inline size_t search_crlf(const uint8_t *data, size_t size) {

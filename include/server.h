@@ -15,4 +15,5 @@ private:
     boost::asio::awaitable<void> accept_tcp();
     boost::asio::io_context ioc;
     std::unique_ptr<boost::asio::ip::tcp::acceptor> tcp_acceptor;
+    std::shared_ptr<boost::asio::ssl::context> sslc;
 };

@@ -56,6 +56,9 @@ bool load_configuration(const string &filename, Configuration &config) {
             cerr << "Cannot parse configuration file: invalid API URL.\n";
             return false;
         }
+        config.cert_chain_file = config_json["cert_chain_file"].get<string>();
+        config.private_key_file = config_json["private_key_file"].get<string>();
+        config.dhparam_file = config_json["dhparam_file"].get<string>();
     } catch (json::exception &e) {
         cerr << "Cannot parse configuration file: invalid JSON file.\n";
         return false;
