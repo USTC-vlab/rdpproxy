@@ -19,6 +19,7 @@ Configuration configuration;
 int main(int argc, char **argv) {
     signal(SIGABRT, crash_handler);
     signal(SIGSEGV, crash_handler);
+    signal(SIGPIPE, SIG_IGN);
     if (argc != 2) {
         cout << "Usage: rdpproxy <config.json>\n";
         return 0;

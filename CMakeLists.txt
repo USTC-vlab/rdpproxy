@@ -6,6 +6,12 @@ if (STATIC)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static -lpthread")
 endif()
 set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -fcoroutines")
+add_custom_command(OUTPUT font.o
+  COMMAND cd ${CMAKE_CURRENT_SOURCE_DIR} && ld -r -b binary -o ${CMAKE_CURRENT_BINARY_DIR}/font.o src/font
+  COMMAND objcopy --rename-section .data=.rodata,alloc,load,readonly,data,contents ${CMAKE_CURRENT_BINARY_DIR}/font.o ${CMAKE_CURRENT_BINARY_DIR}/font.o)
+add_library(font STATIC font.o)
+set_source_files_properties(font.o PROPERTIES EXTERNAL_OBJECT true GENERATED true)
+set_target_properties(font PROPERTIES LINKER_LANGUAGE C)
 add_executable(
     rdpproxy
     src/main.cc
@@ -21,8 +27,10 @@ if (STATIC)
 endif()
 find_package(Boost 1.74 COMPONENTS system REQUIRED)
 find_package(OpenSSL REQUIRED)
-include_directories(${Boost_INCLUDE_DIRS} ${OPENSSL_INCLUDE_DIRS} include vendor)
-target_link_libraries(rdpproxy ${Boost_SYSTEM_LIBRARY} ${OPENSSL_LIBRARIES} pthread)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PACKAGES REQUIRED freerdp2 freerdp-server2 winpr2 xkbcommon vterm)
+include_directories(${Boost_INCLUDE_DIRS} ${OPENSSL_INCLUDE_DIRS} ${PACKAGES_INCLUDE_DIRS} include vendor)
+target_link_libraries(rdpproxy ${Boost_SYSTEM_LIBRARY} ${OPENSSL_LIBRARIES} ${PACKAGES_LINK_LIBRARIES} pthread font)
 if (STATIC)
     target_link_libraries(rdpproxy pthread)
 endif()
