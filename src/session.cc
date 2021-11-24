@@ -2,6 +2,7 @@
 #include <thread>
 #include <cstring>
 #include <xkbcommon/xkbcommon.h>
+#include <utf8cpp/utf8.h>
 #include "util.h"
 #include "session.h"
 #include "config.h"
@@ -107,6 +108,7 @@ boost::asio::awaitable<Session::HandshakeResult> Session::handshake(vector<uint8
     bool is_redirection = false;
     string token;
     string prefix("Cookie: msts=");
+    cerr << cookie << endl;
     if (str_startswith(cookie, prefix)) {
         is_redirection = true;
         size_t old_size = buffer.size();
@@ -222,7 +224,8 @@ RDPSession::RDPSession(int fd_, boost::asio::io_context &ioc_) : fd(fd_), peer(n
     context(nullptr), rfx(nullptr), nsc(nullptr), stream(nullptr), has_activated(false),
     screen_width(640), screen_height(384), frame_id(0), vt(nullptr),
     default_fg_color(0x00f8f8f2), default_bg_color(0x00272822), in_pipe_fd {-1,-1}, out_pipe_fd {-1,-1},
-    xkb_context_(nullptr), xkb_keymap_(nullptr), xkb_state_(nullptr), ioc(ioc_) {}
+    xkb_context_(nullptr), xkb_keymap_(nullptr), xkb_state_(nullptr), ioc(ioc_),
+    has_authenticated(false), has_denied(false), has_redirected(false) {}
 
 RDPSession::~RDPSession() {
     if (peer) {
@@ -292,6 +295,7 @@ bool RDPSession::post_connect() {
     if (peer->settings->AutoLogonEnabled) {
         username = peer->settings->Username;
         password = peer->settings->Password;
+        cerr << username << " " << password << endl;
     }
     if (!rfx_context_reset(rfx, screen_width, screen_height)) {
         return false;
@@ -688,7 +692,7 @@ void RDPSession::run(std::shared_ptr<Session> session) {
         if (numHandles == 0) {
           break;
         }
-        if (WaitForMultipleObjects(numHandles, handles, false, 10000) == WAIT_FAILED) {
+        if (WaitForMultipleObjects(numHandles, handles, false, 1000) == WAIT_FAILED) {
           break;
         }
         if (!peer->CheckFileDescriptor(peer)) {
@@ -700,8 +704,63 @@ void RDPSession::run(std::shared_ptr<Session> session) {
                 vterm_input_write(vt, buffer, len);
             }
         }
+        if (has_authenticated && !has_redirected) {
+            redirect();
+        }
+        if (has_denied) {
+            break;
+        }
     }
     peer->Disconnect(peer);
+}
+
+#define SEC_REDIRECTION_PKT 0x0400
+#define PDU_TYPE_SERVER_REDIRECTION 0xA
+extern "C" BOOL rdp_send_pdu(rdpRdp *rdp, wStream *s, UINT16 type, UINT16 channel_id);
+extern "C" wStream *rdp_send_stream_pdu_init(rdpRdp *rdp);
+
+void RDPSession::redirect() {
+    has_redirected = true;
+    wStream *s = rdp_send_stream_pdu_init(context->rdp);
+    if (!s) {
+        return;
+    }
+    uint16_t length = 2 + 2 + 4 + 4 + 1;
+    uint32_t flags = 0;
+    u16string ip_utf16 = utf8::utf8to16(ip);
+    u16string username_utf16 = utf8::utf8to16(host_username);
+    if (!ip_utf16.empty()) {
+        length += 4 + (ip_utf16.length() + 1) * 2;
+        flags |= LB_TARGET_NET_ADDRESS;
+    }
+    if (!token.empty()) {
+        token = "Cookie: msts=" + token + "\r\n";
+        length += 4 + token.length();
+        flags |= LB_LOAD_BALANCE_INFO;
+    }
+    if (!username_utf16.empty()) {
+        length += 4 + (username_utf16.length() + 1) * 2;
+        flags |= LB_USERNAME;
+    }
+    Stream_Write_UINT16(s, 0);
+    Stream_Write_UINT16(s, SEC_REDIRECTION_PKT);
+    Stream_Write_UINT16(s, length);
+    Stream_Write_UINT32(s, 0);
+    Stream_Write_UINT32(s, flags);
+    if (flags & LB_TARGET_NET_ADDRESS) {
+        Stream_Write_UINT32(s, (ip_utf16.length() + 1) * 2);
+        Stream_Write(s, ip_utf16.c_str(), (ip_utf16.length() + 1) * 2);
+    }
+    if (flags & LB_LOAD_BALANCE_INFO) {
+        Stream_Write_UINT32(s, token.length());
+        Stream_Write(s, token.c_str(), token.length());
+    }
+    if (flags & LB_USERNAME) {
+        Stream_Write_UINT32(s, (username_utf16.length() + 1) * 2);
+        Stream_Write(s, username_utf16.c_str(), (username_utf16.length() + 1) * 2);
+    }
+    Stream_Write_UINT8(s, 0);
+    rdp_send_pdu(context->rdp, s, PDU_TYPE_SERVER_REDIRECTION, 0);
 }
 
 static boost::asio::awaitable<bool> read_line(
@@ -715,18 +774,14 @@ static boost::asio::awaitable<bool> read_line(
     size_t cursor = line.length();
     string csi_command;
     while (true) {
-        if (co_await ASYNC_READ(in, &ch, 1) <= 0) {
-            co_return false;
-        }
+        co_await ASYNC_READ(in, &ch, 1);
         if (ch == '\r' || ch == '\n') {
             break;
         } else if (ch == '\b' || ch == 127) {
             if (cursor == line.length()) {
                 if (!line.empty()) {
                     --cursor;
-                    if (co_await ASYNC_WRITE(out, "\e[D \e[D", 7) <= 0) {
-                        co_return false;
-                    }
+                    co_await ASYNC_WRITE(out, "\e[D \e[D", 7);
                     line = line.substr(0, line.length() - 1);
                 }
             } else if (cursor > 0) {
@@ -741,16 +796,12 @@ static boost::asio::awaitable<bool> read_line(
                     echo.resize(echo.length() + s2.length(), mask);
                 }
                 echo += "\e[" + to_string(s2.length()) + "D";
-                if (co_await ASYNC_WRITE(out, echo) <= 0) {
-                    co_return false;
-                }
+                co_await ASYNC_WRITE(out, echo);
             }
         } else if (ch == '\e') {
             csi_command = ch;
             while (true) {
-                if (co_await ASYNC_READ(in, &ch, 1) <= 0) {
-                    co_return false;
-                }
+                co_await ASYNC_READ(in, &ch, 1);
                 csi_command += ch;
                 if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) {
                     break;
@@ -771,23 +822,17 @@ static boost::asio::awaitable<bool> read_line(
                 }
             }
             if (csi_command == "\e[D" && cursor >= 1) {
-                if (co_await ASYNC_WRITE(out, csi_command) <= 0) {
-                    co_return false;
-                }
+                co_await ASYNC_WRITE(out, csi_command);
                 --cursor;
             } else if (csi_command == "\e[C" && cursor < line.length()) {
-                if (co_await ASYNC_WRITE(out, csi_command) <= 0) {
-                    co_return false;
-                }
+                co_await ASYNC_WRITE(out, csi_command);
                 ++cursor;
             }
         } else {
             if (cursor == line.length()) {
                 line += ch;
                 ++cursor;
-                if (co_await ASYNC_WRITE(out, visible ? &ch : &mask, 1) <= 0) {
-                    co_return false;
-                }
+                co_await ASYNC_WRITE(out, visible ? &ch : &mask, 1);
             } else {
                 const string& s1 = line.substr(0, cursor);
                 const string& s2 = line.substr(cursor);
@@ -800,9 +845,7 @@ static boost::asio::awaitable<bool> read_line(
                     echo.resize(s2.length() + 1, mask);
                 }
                 echo += "\e[" + to_string(s2.length()) + "D";
-                if (co_await ASYNC_WRITE(out, echo) <= 0) {
-                    co_return false;
-                }
+                co_await ASYNC_WRITE(out, echo);
             }
         }
     }
@@ -825,16 +868,15 @@ boost::asio::awaitable<void> RDPSession::greeter() {
     const int maxRetryTimes = 5;
     for (int i = 0; i < maxRetryTimes; ++i) {
         if (username.empty() || password.empty()) {
-            if (!co_await read_line(in, out, str_username, username) ||
-                !co_await read_line(in, out, str_password, password, false)) {
-                co_return;
-            }
+            co_await read_line(in, out, str_username, username);
+            co_await read_line(in, out, str_password, password, false);
         }
-    
-        if (co_await ASYNC_WRITE(out, str_wait) <= 0) {
+        co_await ASYNC_WRITE(out, str_wait);
+        if (co_await auth(username, password, ip, host_username, token, ioc)) {
+            has_authenticated = true;
             co_return;
         }
-        co_return;
     }
+    has_denied = true;
     co_return;
 }

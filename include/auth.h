@@ -11,3 +11,5 @@
 
 boost::asio::awaitable<bool> auth(const std::string &token, std::string &username,
     std::string &ip, uint16_t &port, boost::asio::io_context &ioc);
+boost::asio::awaitable<bool> auth(const std::string &username, const std::string &password,
+    std::string &ip, std::string &host_username, std::string &token, boost::asio::io_context &ioc);

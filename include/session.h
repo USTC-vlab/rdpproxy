@@ -80,6 +80,7 @@ private:
     void render_cell(VTermPos pos, bool reverse = false);
     void terminal_output(const char *s, size_t len);
     void render_glyph(int x, int y, int width, uint32_t ch, uint32_t fg, uint32_t bg);
+    void redirect();
     boost::asio::awaitable<void> greeter();
 
     int fd;
@@ -89,8 +90,11 @@ private:
     NSC_CONTEXT *nsc;
     wStream *stream;
     bool has_activated;
+    std::string token;
     std::string username;
     std::string password;
+    std::string ip;
+    std::string host_username;
     std::vector<uint32_t> framebuffer;
     int screen_width;
     int screen_height;
@@ -112,6 +116,9 @@ private:
     xkb_keymap *xkb_keymap_;
     xkb_state *xkb_state_;
     std::unordered_set<uint32_t> pressed_keys;
+    bool has_authenticated;
+    bool has_redirected;
+    bool has_denied;
     boost::asio::io_context &ioc;
 };
 
