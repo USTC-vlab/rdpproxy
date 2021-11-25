@@ -108,7 +108,6 @@ boost::asio::awaitable<Session::HandshakeResult> Session::handshake(vector<uint8
     bool is_redirection = false;
     string token;
     string prefix("Cookie: msts=");
-    cerr << cookie << endl;
     if (str_startswith(cookie, prefix)) {
         is_redirection = true;
         size_t old_size = buffer.size();
@@ -295,7 +294,6 @@ bool RDPSession::post_connect() {
     if (peer->settings->AutoLogonEnabled) {
         username = peer->settings->Username;
         password = peer->settings->Password;
-        cerr << username << " " << password << endl;
     }
     if (!rfx_context_reset(rfx, screen_width, screen_height)) {
         return false;

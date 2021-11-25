@@ -4,6 +4,12 @@ A reverse proxy for RDP protocol by using routing token
 
 ## Configuration
 
+Command:
+
+```shell
+XKB_CONFIG_ROOT=./vendor/xkb ./rdpproxy config.json
+```
+
 `config.json` example:
 
 ```json
