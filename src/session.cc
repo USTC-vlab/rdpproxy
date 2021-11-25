@@ -102,7 +102,7 @@ boost::asio::awaitable<Session::HandshakeResult> Session::handshake(vector<uint8
     string cookie;
     vector<uint8_t> buffer;
     ssize_t neg_offset;
-    if (!co_await peak_x224_cr_pdu(cookie, buffer, neg_offset)) {
+    if (!co_await peek_x224_cr_pdu(cookie, buffer, neg_offset)) {
         co_return HandshakeError;
     }
     bool is_redirection = false;
@@ -164,7 +164,7 @@ boost::asio::awaitable<bool> Session::read_x224_cr_pdu(string &cookie, vector<ui
     co_return true;
 }
 
-boost::asio::awaitable<bool> Session::peak_x224_cr_pdu(std::string &cookie, std::vector<uint8_t> &buffer, ssize_t &neg_offset) {
+boost::asio::awaitable<bool> Session::peek_x224_cr_pdu(std::string &cookie, std::vector<uint8_t> &buffer, ssize_t &neg_offset) {
     uint8_t *p = co_await peek_bytes(downstream_socket, buffer, 4);
     uint8_t tpkt_version = p[0];
     if (tpkt_version != 0x03) {
@@ -227,6 +227,18 @@ RDPSession::RDPSession(int fd_, boost::asio::io_context &ioc_) : fd(fd_), peer(n
     has_authenticated(false), has_denied(false), has_redirected(false) {}
 
 RDPSession::~RDPSession() {
+    if (in_pipe_fd[0] != -1) {
+        close(in_pipe_fd[0]);
+    }
+    if (in_pipe_fd[1] != -1) {
+        close(in_pipe_fd[1]);
+    }
+    if (out_pipe_fd[0] != -1) {
+        close(out_pipe_fd[0]);
+    }
+    if (out_pipe_fd[1] != -1) {
+        close(out_pipe_fd[1]);
+    }
     if (peer) {
         freerdp_peer_context_free(peer);
         freerdp_peer_free(peer);

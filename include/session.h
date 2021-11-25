@@ -38,7 +38,7 @@ private:
     boost::asio::awaitable<void> handle();
     boost::asio::awaitable<HandshakeResult> handshake(std::vector<uint8_t> &cr_pdu);
     boost::asio::awaitable<bool> read_x224_cr_pdu(std::string &cookie, std::vector<uint8_t> &buffer, ssize_t &neg_offset);
-    boost::asio::awaitable<bool> peak_x224_cr_pdu(std::string &cookie, std::vector<uint8_t> &buffer, ssize_t &neg_offset);
+    boost::asio::awaitable<bool> peek_x224_cr_pdu(std::string &cookie, std::vector<uint8_t> &buffer, ssize_t &neg_offset);
     boost::asio::awaitable<void> handle_up_to_down();
     boost::asio::awaitable<void> handle_down_to_up();
     boost::asio::io_context &ioc;
