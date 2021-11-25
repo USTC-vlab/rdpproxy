@@ -304,8 +304,12 @@ int RDPSession::screen_move_cursor(VTermPos pos, VTermPos oldpos, int visible, v
 
 bool RDPSession::post_connect() {
     if (peer->settings->AutoLogonEnabled) {
-        username = peer->settings->Username;
-        password = peer->settings->Password;
+        if (peer->settings->Username) {
+            username = peer->settings->Username;
+        }
+        if (peer->settings->Password) {
+            password = peer->settings->Password;
+        }
     }
     if (!rfx_context_reset(rfx, screen_width, screen_height)) {
         return false;
